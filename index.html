@@ -315,13 +315,13 @@
 
 <script>
 /* ---------------- CONFIG ---------------- */
-const SUPABASE_URL = "https://lpkrbemnjqsklztekfap.supabase.co ";
+const SUPABASE_URL = "https://lpkrbemnjqsklztekfap.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxwa3JiZW1uanFza2x6dGVrZmFwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMzMTkwNTIsImV4cCI6MjA5ODg5NTA1Mn0.y4hNpVTYL8zEeUsCaVwiry7yX_OUPkl1eiAS2KXmBLk";
-let supabase = null;
+let sb = null;
 let DEMO_MODE = (SUPABASE_URL === "YOUR_SUPABASE_URL");
 
 if(!DEMO_MODE){
-  supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 }
 
 /* ---------------- LOCAL FALLBACK (demo mode only, before Supabase is wired up) ---------------- */
@@ -364,7 +364,7 @@ async function insertRow(table, row){
     demoStore[table].unshift(row);
     return row;
   }
-  const { data, error } = await supabase.from(table).insert(row).select().single();
+  const { data, error } = await sb.from(table).insert(row).select().single();
   if(error){ toast('Error saving: '+error.message); throw error; }
   return data;
 }
@@ -373,7 +373,7 @@ async function fetchRows(table){
   if(DEMO_MODE){
     return demoStore[table];
   }
-  const { data, error } = await supabase.from(table).select('*').order('created_at', {ascending:false});
+  const { data, error } = await sb.from(table).select('*').order('created_at', {ascending:false});
   if(error){ toast('Error loading: '+error.message); return []; }
   return data;
 }
