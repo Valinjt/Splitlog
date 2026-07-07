@@ -412,6 +412,20 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 let currentUser = null;
+let editingWorkoutId = null;
+let editingExerciseId = null;
+let editingMeasurementId = null;
+let editingTrackId = null;
+let _workouts = [], _exercises = [], _measurements = [], _trackTimes = [];
+
+function groupExercisesByWorkout(exercises){
+  const map = {};
+  exercises.forEach(ex=>{
+    if(!map[ex.workout_id]) map[ex.workout_id] = [];
+    map[ex.workout_id].push(ex);
+  });
+  return map;
+}
 
 function toast(msg){
   const t = document.getElementById('toast');
@@ -617,9 +631,32 @@ function renderWorkouts(workouts, exercisesByWorkout){
   const el = document.getElementById('workout-list');
   if(!workouts.length){ el.innerHTML = '<div class="card"><div class="empty">No workouts yet — create one above.</div></div>'; return; }
 
+  const categories = ['sprint','lift','conditioning','recovery','mobility'];
+
   el.innerHTML = workouts.map(w=>{
     const exs = exercisesByWorkout[w.id] || [];
-    const exRows = exs.length ? exs.map(ex=>`
+    const exRows = exs.length ? exs.map(ex=>{
+      if(editingExerciseId === ex.id){
+        return `
+        <div class="exercise-row" data-ex-id="${ex.id}">
+          <div class="grid3">
+            <input type="text" id="editexname-${ex.id}" value="${escapeHtml(ex.name)}" placeholder="Exercise name">
+            <input type="number" id="editexsets-${ex.id}" value="${ex.sets??''}" placeholder="Sets" min="0" max="20">
+            <input type="number" id="editexreps-${ex.id}" value="${ex.reps??''}" placeholder="Reps" min="0" max="100">
+          </div>
+          <div class="grid2">
+            <input type="number" id="editexweight-${ex.id}" value="${ex.weight??''}" step="0.5" placeholder="Weight (lb)" min="0" max="1000">
+            <input type="text" id="editexnotes-${ex.id}" value="${escapeHtml(ex.notes||'')}" placeholder="Notes">
+          </div>
+          <div class="field-error" id="editexerr-${ex.id}">Exercise needs a name, and sets/reps/weight must be positive, realistic numbers.</div>
+          <div class="row-actions" style="margin-top:6px;">
+            <button class="small" onclick="handleSaveExercise('${ex.id}')">Save</button>
+            <button class="ghost small" onclick="editingExerciseId=null; renderWorkouts(_workouts, groupExercisesByWorkout(_exercises));">Cancel</button>
+          </div>
+        </div>
+      `;
+      }
+      return `
       <div class="exercise-row" data-ex-id="${ex.id}">
         <div class="row-between">
           <div>
@@ -631,23 +668,50 @@ function renderWorkouts(workouts, exercisesByWorkout){
             ].filter(Boolean).join(' · ') || 'no detail'}${ex.notes? ' — '+escapeHtml(ex.notes):''}</div>
           </div>
           <div class="row-actions">
+            <button class="icon-btn" onclick="editingExerciseId='${ex.id}'; renderWorkouts(_workouts, groupExercisesByWorkout(_exercises));" title="Edit">✎</button>
             <button class="icon-btn del" onclick="deleteExercise('${ex.id}')" title="Delete">✕</button>
           </div>
         </div>
       </div>
-    `).join('') : '<div class="empty" style="padding:8px 0;">No exercises logged yet.</div>';
+    `;
+    }).join('') : '<div class="empty" style="padding:8px 0;">No exercises logged yet.</div>';
 
-    return `
-    <div class="card">
+    const headerBlock = editingWorkoutId === w.id ? `
+      <div style="margin-bottom:8px;">
+        <label>Title</label>
+        <input type="text" id="editwtitle-${w.id}" value="${escapeHtml(w.title)}">
+        <label>Category</label>
+        <select id="editwcat-${w.id}">
+          ${categories.map(c=>`<option value="${c}" ${c===w.category?'selected':''}>${c[0].toUpperCase()+c.slice(1)}</option>`).join('')}
+        </select>
+        <label>Date</label>
+        <input type="date" id="editwdate-${w.id}" value="${w.workout_date}">
+        <label>Notes</label>
+        <textarea id="editwnotes-${w.id}" rows="2">${escapeHtml(w.notes||'')}</textarea>
+        <div class="field-error" id="editwerr-${w.id}">A workout needs a title.</div>
+        <div class="row-actions">
+          <button class="small" onclick="handleSaveWorkout('${w.id}')">Save</button>
+          <button class="ghost small" onclick="editingWorkoutId=null; renderWorkouts(_workouts, groupExercisesByWorkout(_exercises));">Cancel</button>
+        </div>
+      </div>
+    ` : `
       <div class="row-between" style="margin-bottom:6px;">
         <div>
           <h3 style="display:inline;">${escapeHtml(w.title)}</h3>
           ${catBadge(w.category)}
           <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${w.workout_date}</div>
         </div>
-        <button class="icon-btn del" onclick="deleteWorkout('${w.id}')" title="Delete workout">✕</button>
+        <div class="row-actions">
+          <button class="icon-btn" onclick="editingWorkoutId='${w.id}'; renderWorkouts(_workouts, groupExercisesByWorkout(_exercises));" title="Edit workout">✎</button>
+          <button class="icon-btn del" onclick="deleteWorkout('${w.id}')" title="Delete workout">✕</button>
+        </div>
       </div>
       ${w.notes ? `<p class="desc">${escapeHtml(w.notes)}</p>` : ''}
+    `;
+
+    return `
+    <div class="card">
+      ${headerBlock}
       ${exRows}
       <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px;">
         <div class="grid3">
@@ -664,6 +728,52 @@ function renderWorkouts(workouts, exercisesByWorkout){
       </div>
     </div>`;
   }).join('');
+}
+
+async function handleSaveWorkout(id){
+  const title = document.getElementById('editwtitle-'+id).value.trim();
+  const category = document.getElementById('editwcat-'+id).value;
+  const workout_date = document.getElementById('editwdate-'+id).value;
+  const notes = document.getElementById('editwnotes-'+id).value.trim();
+  const errEl = document.getElementById('editwerr-'+id);
+
+  if(!title){ errEl.classList.add('show'); return; }
+  errEl.classList.remove('show');
+
+  await updateRow('workouts', id, {title, category, workout_date, notes});
+  editingWorkoutId = null;
+  toast('Workout updated');
+  refreshAll();
+}
+
+async function handleSaveExercise(id){
+  const name = document.getElementById('editexname-'+id).value.trim();
+  const sets = document.getElementById('editexsets-'+id).value;
+  const reps = document.getElementById('editexreps-'+id).value;
+  const weight = document.getElementById('editexweight-'+id).value;
+  const notes = document.getElementById('editexnotes-'+id).value.trim();
+  const errEl = document.getElementById('editexerr-'+id);
+
+  const setsOk = sets==='' || isNonNegInt(sets, 20);
+  const repsOk = reps==='' || isNonNegInt(reps, 100);
+  const weightOk = validWeight(weight);
+
+  if(!name || !setsOk || !repsOk || !weightOk){
+    errEl.classList.add('show');
+    return;
+  }
+  errEl.classList.remove('show');
+
+  await updateRow('exercises', id, {
+    name,
+    sets: sets===''? null : parseInt(sets),
+    reps: reps===''? null : parseInt(reps),
+    weight: weight===''? null : parseFloat(weight),
+    notes
+  });
+  editingExerciseId = null;
+  toast('Exercise updated');
+  refreshAll();
 }
 
 async function handleAddExercise(workoutId){
@@ -758,7 +868,27 @@ function fmtDate(iso){
 function renderMeasurements(measurements){
   const el = document.getElementById('measure-history');
   if(!measurements.length){ el.innerHTML = '<div class="empty">No measurements logged yet.</div>'; return; }
-  el.innerHTML = `<table><tbody>${measurements.slice(0,25).map(m=>`
+  el.innerHTML = `<table><tbody>${measurements.slice(0,25).map(m=>{
+    if(editingMeasurementId === m.id){
+      return `<tr><td colspan="3">
+        <div class="grid2">
+          <div><label>Weight (lb)</label><input type="number" step="0.1" id="editm-weight-${m.id}" value="${m.weight??''}"></div>
+          <div><label>Chest (in)</label><input type="number" step="0.1" id="editm-chest-${m.id}" value="${m.chest??''}"></div>
+          <div><label>Waist (in)</label><input type="number" step="0.1" id="editm-waist-${m.id}" value="${m.waist??''}"></div>
+          <div><label>Biceps (in)</label><input type="number" step="0.1" id="editm-biceps-${m.id}" value="${m.biceps??''}"></div>
+          <div><label>Thighs (in)</label><input type="number" step="0.1" id="editm-thighs-${m.id}" value="${m.thighs??''}"></div>
+          <div><label>Calves (in)</label><input type="number" step="0.1" id="editm-calves-${m.id}" value="${m.calves??''}"></div>
+          <div><label>Vertical Jump (in)</label><input type="number" step="0.1" id="editm-vert-${m.id}" value="${m.vertical_jump??''}"></div>
+          <div><label>Mile Time</label><input type="text" id="editm-mile-${m.id}" value="${escapeHtml(m.mile_time||'')}"></div>
+        </div>
+        <div class="field-error" id="editm-err-${m.id}">Check your values — weight/measurements must be positive and realistic, and mile time should look like mm:ss.</div>
+        <div class="row-actions">
+          <button class="small" onclick="handleSaveMeasurement('${m.id}')">Save</button>
+          <button class="ghost small" onclick="editingMeasurementId=null; renderMeasurements(_measurements);">Cancel</button>
+        </div>
+      </td></tr>`;
+    }
+    return `
     <tr>
       <td style="white-space:nowrap;">${fmtDate(m.created_at)}</td>
       <td>${[
@@ -766,8 +896,34 @@ function renderMeasurements(measurements){
         m.biceps?`Biceps ${m.biceps}"`:null, m.thighs?`Thighs ${m.thighs}"`:null, m.calves?`Calves ${m.calves}"`:null,
         m.vertical_jump?`Vert ${m.vertical_jump}"`:null, m.mile_time?`Mile ${m.mile_time}`:null
       ].filter(Boolean).join(' · ') || '—'}</td>
-      <td><button class="icon-btn del" onclick="deleteMeasurement('${m.id}')" title="Delete">✕</button></td>
-    </tr>`).join('')}</tbody></table>`;
+      <td>
+        <div class="row-actions">
+          <button class="icon-btn" onclick="editingMeasurementId='${m.id}'; renderMeasurements(_measurements);" title="Edit">✎</button>
+          <button class="icon-btn del" onclick="deleteMeasurement('${m.id}')" title="Delete">✕</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('')}</tbody></table>`;
+}
+
+async function handleSaveMeasurement(id){
+  const vals = {
+    weight: numOrNull('editm-weight-'+id), chest: numOrNull('editm-chest-'+id), waist: numOrNull('editm-waist-'+id),
+    biceps: numOrNull('editm-biceps-'+id), thighs: numOrNull('editm-thighs-'+id), calves: numOrNull('editm-calves-'+id),
+    vertical_jump: numOrNull('editm-vert-'+id), mile_time: document.getElementById('editm-mile-'+id).value.trim() || null
+  };
+  const errEl = document.getElementById('editm-err-'+id);
+  const ok = validBodyweight(vals.weight) && validMeasureInches(vals.chest) && validMeasureInches(vals.waist)
+    && validMeasureInches(vals.biceps) && validMeasureInches(vals.thighs) && validMeasureInches(vals.calves)
+    && validMeasureInches(vals.vertical_jump) && validMileTime(vals.mile_time);
+
+  if(!ok){ errEl.classList.add('show'); return; }
+  errEl.classList.remove('show');
+
+  await updateRow('measurements', id, vals);
+  editingMeasurementId = null;
+  toast('Measurement updated');
+  refreshAll();
 }
 
 function renderTrack(track){
@@ -778,13 +934,53 @@ function renderTrack(track){
   const el = document.getElementById('track-history');
   if(!track.length){ el.innerHTML = '<div class="empty">No times logged yet.</div>'; return; }
   el.innerHTML = `<table><tbody>${track.slice(0,25).map(t=>{
+    if(editingTrackId === t.id){
+      return `<tr><td colspan="3">
+        <div class="grid3">
+          <div><label>Event</label>
+            <select id="editt-event-${t.id}">
+              <option value="100" ${t.event==='100'?'selected':''}>100m</option>
+              <option value="200" ${t.event==='200'?'selected':''}>200m</option>
+              <option value="400" ${t.event==='400'?'selected':''}>400m</option>
+            </select>
+          </div>
+          <div><label>Time (sec)</label><input type="number" step="0.01" id="editt-time-${t.id}" value="${t.time_seconds}"></div>
+          <div><label>Conditions</label><input type="text" id="editt-notes-${t.id}" value="${escapeHtml(t.notes||'')}"></div>
+        </div>
+        <div class="field-error" id="editt-err-${t.id}">Enter a positive, realistic time for the selected event.</div>
+        <div class="row-actions">
+          <button class="small" onclick="handleSaveTrack('${t.id}')">Save</button>
+          <button class="ghost small" onclick="editingTrackId=null; renderTrack(_trackTimes);">Cancel</button>
+        </div>
+      </td></tr>`;
+    }
     const isPR = track.filter(x=>x.event===t.event).sort((a,b)=>a.time_seconds-b.time_seconds)[0].id === t.id;
     return `<tr>
       <td style="white-space:nowrap;">${fmtDate(t.created_at)}</td>
       <td><b>${t.event}m</b> — ${t.time_seconds}s ${isPR?'<span class="pr-badge">PR</span>':''}${t.notes?'<br><span style="color:var(--text-dim);font-size:12px;">'+escapeHtml(t.notes)+'</span>':''}</td>
-      <td><button class="icon-btn del" onclick="deleteTrackTime('${t.id}')" title="Delete">✕</button></td>
+      <td>
+        <div class="row-actions">
+          <button class="icon-btn" onclick="editingTrackId='${t.id}'; renderTrack(_trackTimes);" title="Edit">✎</button>
+          <button class="icon-btn del" onclick="deleteTrackTime('${t.id}')" title="Delete">✕</button>
+        </div>
+      </td>
     </tr>`;
   }).join('')}</tbody></table>`;
+}
+
+async function handleSaveTrack(id){
+  const event = document.getElementById('editt-event-'+id).value;
+  const t = document.getElementById('editt-time-'+id).value;
+  const notes = document.getElementById('editt-notes-'+id).value.trim();
+  const errEl = document.getElementById('editt-err-'+id);
+
+  if(!validSprintTime(event, t)){ errEl.classList.add('show'); return; }
+  errEl.classList.remove('show');
+
+  await updateRow('track_times', id, {event, time_seconds: parseFloat(t), notes});
+  editingTrackId = null;
+  toast('Time updated');
+  refreshAll();
 }
 
 function renderWeekOverview(workouts){
@@ -866,12 +1062,9 @@ async function refreshAll(){
   const [workouts, exercises, measurements, track] = await Promise.all([
     fetchRows('workouts'), fetchRows('exercises'), fetchRows('measurements'), fetchRows('track_times')
   ]);
+  _workouts = workouts; _exercises = exercises; _measurements = measurements; _trackTimes = track;
 
-  const exercisesByWorkout = {};
-  exercises.forEach(ex=>{
-    if(!exercisesByWorkout[ex.workout_id]) exercisesByWorkout[ex.workout_id] = [];
-    exercisesByWorkout[ex.workout_id].push(ex);
-  });
+  const exercisesByWorkout = groupExercisesByWorkout(exercises);
 
   document.getElementById('stat-workouts').textContent = workouts.length;
   document.getElementById('stat-weight').textContent = measurements[0]?.weight ? measurements[0].weight+' lb' : '—';
