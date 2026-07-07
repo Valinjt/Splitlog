@@ -201,6 +201,13 @@
   #auth-info.show{display:block;}
 
   #app-shell{display:none;}
+
+  .coach-block{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:10px;}
+  .coach-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--gold);font-weight:700;margin-bottom:6px;}
+  .coach-text{font-size:13px;line-height:1.55;color:var(--text);}
+  .week-stat-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px;}
+  .week-pill{background:var(--surface-2);border:1px solid var(--line);border-radius:20px;padding:5px 12px;font-size:12px;color:var(--text-dim);}
+  .week-pill b{color:var(--text);}
 </style>
 </head>
 <body>
@@ -275,6 +282,11 @@
 
   <!-- WORKOUTS -->
   <section class="view" id="view-workouts">
+    <div class="section-title">This Week</div>
+    <div class="card" id="week-overview">
+      <div class="empty">Log a workout to see your weekly training overview.</div>
+    </div>
+
     <div class="section-title">New Workout</div>
     <div class="card">
       <label>Title</label>
@@ -301,6 +313,15 @@
 
     <div class="section-title">Your Workouts</div>
     <div id="workout-list"><div class="card"><div class="empty">No workouts yet — create one above.</div></div></div>
+
+    <div class="section-title">AI Coach</div>
+    <div class="card">
+      <h3>Weekly Recap &amp; Training Interpretation</h3>
+      <p class="desc">Reads the workouts, exercises, measurements, and times you've already saved and gives you a short coaching read on how training's going.</p>
+      <button id="btn-generate-review" style="width:100%;">Generate Review</button>
+      <div id="coach-error" class="field-error" style="margin-top:10px;"></div>
+      <div id="coach-results" style="margin-top:14px;"></div>
+    </div>
   </section>
 
   <!-- MEASUREMENTS -->
@@ -766,6 +787,78 @@ function renderTrack(track){
   }).join('')}</tbody></table>`;
 }
 
+function renderWeekOverview(workouts){
+  const el = document.getElementById('week-overview');
+  const now = new Date();
+  const weekAgo = new Date(now.getTime() - 7*24*60*60*1000);
+  const recent = workouts.filter(w => new Date(w.created_at) >= weekAgo);
+
+  if(!recent.length){
+    el.innerHTML = '<div class="empty">No workouts logged in the last 7 days yet.</div>';
+    return;
+  }
+
+  const byCat = {};
+  recent.forEach(w => { byCat[w.category] = (byCat[w.category]||0) + 1; });
+  const catPills = Object.entries(byCat).map(([cat,count]) =>
+    `<span class="week-pill">${catBadge(cat)} <b>×${count}</b></span>`
+  ).join('');
+
+  el.innerHTML = `
+    <div style="margin-bottom:8px;"><b class="num" style="font-size:20px;color:var(--gold);">${recent.length}</b> <span style="color:var(--text-dim);font-size:13px;">session${recent.length===1?'':'s'} in the last 7 days</span></div>
+    <div class="week-stat-row">${catPills}</div>
+  `;
+}
+
+/* ---------------- AI COACH ---------------- */
+document.getElementById('btn-generate-review').addEventListener('click', async ()=>{
+  const btn = document.getElementById('btn-generate-review');
+  const errEl = document.getElementById('coach-error');
+  const resultsEl = document.getElementById('coach-results');
+  errEl.classList.remove('show');
+  resultsEl.innerHTML = '';
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+
+  try {
+    const [workouts, exercises, measurements, track] = await Promise.all([
+      fetchRows('workouts'), fetchRows('exercises'), fetchRows('measurements'), fetchRows('track_times')
+    ]);
+
+    if(!workouts.length && !measurements.length && !track.length){
+      errEl.textContent = 'Log at least a workout, measurement, or time first — there\'s nothing to review yet.';
+      errEl.classList.add('show');
+      return;
+    }
+
+    const resp = await fetch('/api/coach', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ workouts, exercises, measurements, trackTimes: track })
+    });
+    const data = await resp.json();
+
+    if(!resp.ok || data.error){
+      errEl.textContent = data.error || 'Something went wrong generating the review.';
+      errEl.classList.add('show');
+      return;
+    }
+
+    resultsEl.innerHTML = `
+      <div class="coach-block"><div class="coach-label">Weekly Summary</div><div class="coach-text">${escapeHtml(data.weekly_summary || '—')}</div></div>
+      <div class="coach-block"><div class="coach-label">Training Trend</div><div class="coach-text">${escapeHtml(data.training_trend || '—')}</div></div>
+      <div class="coach-block"><div class="coach-label">Focus</div><div class="coach-text">${escapeHtml(data.focus || '—')}</div></div>
+      <div class="coach-block"><div class="coach-label">Patterns To Watch</div><div class="coach-text">${escapeHtml(data.patterns || '—')}</div></div>
+    `;
+  } catch(err){
+    errEl.textContent = 'Network error reaching the coach — check your connection and try again.';
+    errEl.classList.add('show');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate Review';
+  }
+});
+
 /* ---------------- MAIN REFRESH ---------------- */
 async function refreshAll(){
   if(!currentUser) return;
@@ -796,6 +889,7 @@ async function refreshAll(){
     : '<div class="empty">Nothing logged yet — head to Workouts to get started.</div>';
 
   renderWorkouts(workouts, exercisesByWorkout);
+  renderWeekOverview(workouts);
   renderMeasurements(measurements);
   renderTrack(track);
 
